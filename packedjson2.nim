@@ -1,6 +1,8 @@
 import
-  packedjson2 / bitabs,
-  std / [parsejson, streams, strutils, macros]
+  packedjson2 / [bitabs, parsenums],
+  std / [parsejson, streams, macros],
+  ssostrings
+from std/strutils import toHex
 export JsonParsingError, JsonKindError
 
 type
@@ -48,7 +50,7 @@ template toNode(kind, operand: int32): Node = Node(operand shl opcodeBits.int32 
 type
   JsonTree* = object
     nodes: seq[Node]
-    atoms: BiTable[string]
+    atoms: BiTable[String]
 
 proc isEmpty*(tree: JsonTree): bool {.inline.} = tree.nodes.len == 0
 
@@ -99,7 +101,7 @@ iterator items*(tree: JsonTree, n: JsonNode): JsonNode =
   for ch0 in sonsReadonly(tree, NodePos n):
     yield JsonNode ch0
 
-iterator pairs*(tree: JsonTree, n: JsonNode): (lent string, JsonNode) =
+iterator pairs*(tree: JsonTree, n: JsonNode): (lent String, JsonNode) =
   ## Iterator for the pairs of `x`. `x` has to be a JObject.
   assert not n.isNil
   assert kind(tree, n) == JObject
@@ -108,7 +110,7 @@ iterator pairs*(tree: JsonTree, n: JsonNode): (lent string, JsonNode) =
     let litId = ch0.firstSon.litId
     yield (tree.atoms[litId], JsonNode(ch0.int+2))
 
-proc rawGet(tree: JsonTree, n: JsonNode, name: string): JsonNode =
+proc rawGet(tree: JsonTree, n: JsonNode, name: String): JsonNode =
   assert not n.isNil
   assert kind(tree, n) == JObject
   let litId = tree.atoms.getKeyId(name)
@@ -126,7 +128,7 @@ proc raiseKeyError(key: string) {.noinline, noreturn.} =
 proc get*(tree: JsonTree, n: JsonNode, name: string): JsonNode =
   ## Gets a field from a `JObject`.
   ## If the value at `name` does not exist, raises KeyError.
-  result = rawGet(tree, n, name)
+  result = rawGet(tree, n, toStr(name))
   if result.isNil:
     raiseKeyError(name)
 
@@ -145,7 +147,7 @@ proc get*(tree: JsonTree, n: JsonNode, index: int): JsonNode =
 
 proc contains*(tree: JsonTree, n: JsonNode, key: string): bool =
   ## Checks if `key` exists in `n`.
-  let x = rawGet(tree, n, key)
+  let x = rawGet(tree, n, toStr(key))
   result = x >= jRoot
 
 proc hasKey*(tree: JsonTree, n: JsonNode, key: string): bool =
@@ -160,7 +162,7 @@ proc get*(tree: JsonTree, n: JsonNode, keys: varargs[string]): JsonNode =
   if result.isNil: return
   for kk in keys:
     if kind(tree, result) != JObject: return jNull
-    result = rawGet(tree, result, kk)
+    result = rawGet(tree, result, toStr(kk))
     if result.isNil: return
 
 proc get*(tree: JsonTree, n: JsonNode, indexes: varargs[int]): JsonNode =
@@ -183,7 +185,7 @@ proc get*(tree: JsonTree, n: JsonNode, indexes: varargs[int]): JsonNode =
 proc rawDelete(tree: var JsonTree, n: JsonNode, key: string) =
   assert not n.isNil
   assert kind(tree, n) == JObject
-  let litId = tree.atoms.getKeyId(key)
+  let litId = tree.atoms.getKeyId(toStr(key))
   if litId == LitId(0):
     raiseKeyError(key)
   var start = -1
@@ -210,7 +212,7 @@ proc delete*(tree: var JsonTree, n: JsonNode, key: string) =
   ## Deletes ``x[key]``.
   rawDelete(tree, n, key)
 
-template str(n: NodePos): string = tree.atoms[n.litId]
+template str(n: NodePos): String = tree.atoms[n.litId]
 template bval(n: NodePos): bool = n.operand == 1
 
 proc getStr*(tree: JsonTree, n: JsonNode, default: string = ""): string =
@@ -218,7 +220,7 @@ proc getStr*(tree: JsonTree, n: JsonNode, default: string = ""): string =
   ##
   ## Returns `default` if `x` is not a `JString`.
   if n.isNil or kind(tree, n) != JString: result = default
-  else: result = NodePos(n).str
+  else: result = $toCStr(NodePos(n).str)
 
 proc getInt*(tree: JsonTree, n: JsonNode, default: int = 0): int =
   ## Retrieves the int value of a `JInt`.
@@ -268,7 +270,7 @@ proc patch(tree: var JsonTree; pos: PatchPos) =
   tree.nodes[pos] = toNode(tree.nodes[pos].int32, distance)
 
 proc storeAtom(tree: var JsonTree; kind: int32; data: string) {.inline.} =
-  tree.nodes.add toNode(kind, int32 getOrIncl(tree.atoms, data))
+  tree.nodes.add toNode(kind, int32 getOrIncl(tree.atoms, toStr(data)))
 
 proc parseJson(tree: var JsonTree; p: var JsonParser) =
   case p.tok
@@ -373,7 +375,7 @@ proc parseFile*(filename: string): JsonTree =
     raise newException(IOError, "cannot read from file: " & filename)
   result = parseJson(stream, filename)
 
-proc escapeJsonUnquoted*(s: string; result: var string) =
+proc escapeJsonUnquoted*[T](s: T; result: var string) =
   ## Converts a string `s` to its JSON representation without quotes.
   ## Appends to `result`.
   for c in s:
@@ -390,12 +392,12 @@ proc escapeJsonUnquoted*(s: string; result: var string) =
     of '\\': result.add("\\\\") #"
     else: result.add(c)
 
-proc escapeJsonUnquoted*(s: string): string =
+proc escapeJsonUnquoted*[T](s: T): string =
   ## Converts a string `s` to its JSON representation without quotes.
   result = newStringOfCap(s.len + s.len shr 3)
   escapeJsonUnquoted(s, result)
 
-proc escapeJson*(s: string; result: var string) =
+proc escapeJson*[T](s: T; result: var string) =
   ## Converts a string `s` to its JSON representation with quotes.
   ## Appends to `result`.
   result.add("\"")
@@ -443,7 +445,7 @@ proc currentAndNext(it: var JsonIter, tree: JsonTree): (NodePos, LitId, Action) 
   else:
     result = (NodePos(-1), LitId(0), actionEnd)
 
-template key: string = tree.atoms[keyId]
+template key: String = tree.atoms[keyId]
 
 proc toUgly*(result: var string, tree: JsonTree, n: NodePos) =
   case n.kind
@@ -482,7 +484,7 @@ proc toUgly*(result: var string, tree: JsonTree, n: NodePos) =
           it.push child
           pendingComma = false
         of opcodeInt, opcodeFloat:
-          result.add child.str
+          result.add toCStr(child.str)
           pendingComma = true
         of opcodeString:
           escapeJson(child.str, result)
@@ -502,7 +504,7 @@ proc toUgly*(result: var string, tree: JsonTree, n: NodePos) =
   of opcodeString:
     escapeJson(n.str, result)
   of opcodeInt, opcodeFloat:
-    result.add n.str
+    result.add toCStr(n.str)
   of opcodeBool:
     result.add(if n.bval: "true" else: "false")
   of opcodeNull:
